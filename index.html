@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>siglab</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <span>siglab</span>
+    </div>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="logic">01 logic</button>
+      <button class="tab" data-tab="scope">02 scope</button>
+      <button class="tab" data-tab="cpu">03 cpu</button>
+      <button class="tab" data-tab="fields">04 fields</button>
+      <button class="tab" data-tab="arena">05 arena</button>
+    </nav>
+
+    <div class="meta">v1.0</div>
+  </header>
+
+  <main class="workspace">
+    <!-- 01: Logic Sandbox -->
+    <section class="panel active" id="panel-logic">
+      <div class="toolbar">
+        <div class="tool-group">
+          <span class="label">add</span>
+          <button data-add="IN">IN</button>
+          <button data-add="CLK">CLK</button>
+          <button data-add="AND">AND</button>
+          <button data-add="OR">OR</button>
+          <button data-add="NOT">NOT</button>
+          <button data-add="NAND">NAND</button>
+          <button data-add="XOR">XOR</button>
+          <button data-add="OUT">LED</button>
+          <button data-add="HEX">HEX</button>
+        </div>
+
+        <div class="tool-group">
+          <span class="label">preset</span>
+          <select id="logic-preset">
+            <option value="half-adder">half adder</option>
+            <option value="sr-latch">sr latch</option>
+            <option value="hex-clock">4-bit hex clock</option>
+          </select>
+          <label class="inline-ctrl">
+            clk <input type="range" id="logic-hz" min="0.5" max="5" step="0.5" value="1">
+            <span id="logic-hz-val">1.0Hz</span>
+          </label>
+        </div>
+
+        <div class="tool-group right">
+          <button id="logic-export">copy json</button>
+          <button id="logic-import">load json</button>
+          <button id="logic-clear" class="danger">clear</button>
+        </div>
+      </div>
+
+      <div class="canvas-wrap" id="logic-wrap">
+        <canvas id="logic-canvas"></canvas>
+      </div>
+
+      <div class="statusbar">
+        <span>click IN to toggle | drag output pin to input pin to wire | click input pin to unplug | right-click node to delete</span>
+        <span id="logic-stats">0 nodes · 0 wires</span>
+      </div>
+    </section>
+
+    <!-- 02: Oscilloscope / Synth / FFT -->
+    <section class="panel" id="panel-scope">
+      <div class="toolbar">
+        <div class="tool-group">
+          <span class="label">src</span>
+          <button id="scope-synth">synth: off</button>
+          <button id="scope-mic">mic: off</button>
+        </div>
+
+        <div class="tool-group">
+          <select id="scope-wave">
+            <option value="sine">sine</option>
+            <option value="square">square</option>
+            <option value="sawtooth">sawtooth</option>
+            <option value="triangle">triangle</option>
+          </select>
+
+          <label class="inline-ctrl">
+            freq <input type="range" id="scope-freq" min="60" max="2000" step="1" value="440">
+            <span id="scope-freq-val">440Hz</span>
+          </label>
+
+          <label class="inline-ctrl">
+            lpf <input type="range" id="scope-cut" min="150" max="10000" step="10" value="8000">
+            <span id="scope-cut-val">8.0kHz</span>
+          </label>
+
+          <label class="inline-ctrl">
+            vol <input type="range" id="scope-gain" min="0" max="0.4" step="0.01" value="0.12">
+          </label>
+        </div>
+
+        <div class="tool-group right">
+          <select id="scope-view">
+            <option value="split">scope + fft</option>
+            <option value="scope">scope only</option>
+            <option value="fft">fft only</option>
+          </select>
+          <button id="scope-hold">hold</button>
+        </div>
+      </div>
+
+      <div class="canvas-wrap" id="scope-wrap">
+        <canvas id="scope-canvas"></canvas>
+      </div>
+
+      <div class="statusbar">
+        <span>rising-edge trigger | fft 0–10kHz | mic routed to analyser only</span>
+        <span id="scope-stats">idle</span>
+      </div>
+    </section>
+
+    <!-- 03: Visual 8-bit CPU & RAM -->
+    <section class="panel" id="panel-cpu">
+      <div class="toolbar">
+        <div class="tool-group">
+          <span class="label">prog</span>
+          <select id="cpu-preset">
+            <option value="fib">fibonacci -> ram</option>
+            <option value="sum">sum 1..10</option>
+            <option value="copy">pointer array copy</option>
+          </select>
+          <button id="cpu-asm">assemble</button>
+        </div>
+
+        <div class="tool-group">
+          <button id="cpu-step">step</button>
+          <button id="cpu-run">run</button>
+          <button id="cpu-reset">reset</button>
+          <label class="inline-ctrl">
+            clk <input type="range" id="cpu-speed" min="1" max="10" step="1" value="3">
+            <span id="cpu-speed-val">3Hz</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="cpu-layout">
+        <div class="cpu-editor">
+          <div class="subhead">assembly (R0–R3, 32B RAM)</div>
+          <textarea id="cpu-code" spellcheck="false"></textarea>
+          <div class="isa-help">
+            MOV, ADD, SUB, LD, ST, CMP, JMP, JZ, JNZ, JL, HLT · indirect: [R3]
+          </div>
+        </div>
+
+        <div class="cpu-right">
+          <div class="canvas-wrap" id="cpu-wrap">
+            <canvas id="cpu-canvas"></canvas>
+          </div>
+          <div class="ram-panel">
+            <div class="subhead">ram [0x00 .. 0x1F]</div>
+            <div class="ram-grid" id="cpu-ram"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="statusbar">
+        <span>edit asm and click assemble | step or run to trace bus transfers and memory writes</span>
+        <span id="cpu-stats">ready</span>
+      </div>
+    </section>
+
+    <!-- 04: EM Fields & Wave Interference -->
+    <section class="panel" id="panel-fields">
+      <div class="toolbar">
+        <div class="tool-group">
+          <span class="label">mode</span>
+          <select id="fields-mode">
+            <option value="efield">electrostatics</option>
+            <option value="waves">2d wave interference</option>
+          </select>
+        </div>
+
+        <div class="tool-group" id="fields-ef-ctrls">
+          <button id="fields-add-pos">+q charge</button>
+          <button id="fields-add-neg">-q charge</button>
+          <button id="fields-spawn">burst particles</button>
+          <select id="fields-preset">
+            <option value="dipole">dipole</option>
+            <option value="quad">quadrupole</option>
+            <option value="repel">same-sign pair</option>
+          </select>
+        </div>
+
+        <div class="tool-group hidden" id="fields-wv-ctrls">
+          <button id="fields-add-src">add source</button>
+          <label class="inline-ctrl">
+            freq <input type="range" id="fields-freq" min="1" max="6" step="0.2" value="3">
+            <span id="fields-freq-val">3.0</span>
+          </label>
+          <button id="fields-slit">2-source reset</button>
+        </div>
+
+        <div class="tool-group right">
+          <button id="fields-clear" class="danger">clear</button>
+        </div>
+      </div>
+
+      <div class="canvas-wrap" id="fields-wrap">
+        <canvas id="fields-canvas"></canvas>
+      </div>
+
+      <div class="statusbar">
+        <span id="fields-hint">drag charges to warp field | click empty space to drop test particle | right-click charge to remove</span>
+        <span id="fields-stats">0 objects</span>
+      </div>
+    </section>
+
+    <!-- 05: Pathfinding & Neural Net Arena -->
+    <section class="panel" id="panel-arena">
+      <div class="toolbar">
+        <div class="tool-group">
+          <span class="label">lab</span>
+          <select id="arena-mode">
+            <option value="pathfind">pathfinding</option>
+            <option value="mlp">neural network (mlp)</option>
+          </select>
+        </div>
+
+        <div class="tool-group" id="arena-pf-ctrls">
+          <select id="arena-algo">
+            <option value="astar">A* search</option>
+            <option value="dijkstra">Dijkstra</option>
+            <option value="bfs">Breadth-First (BFS)</option>
+          </select>
+          <button id="arena-pf-run">run</button>
+          <button id="arena-maze">gen maze</button>
+          <button id="arena-pf-clear" class="danger">clear walls</button>
+        </div>
+
+        <div class="tool-group hidden" id="arena-nn-ctrls">
+          <select id="arena-dataset">
+            <option value="xor">XOR</option>
+            <option value="circle">circle</option>
+            <option value="spiral">spiral</option>
+            <option value="linear">linear</option>
+          </select>
+          <label class="inline-ctrl">
+            lr <input type="range" id="arena-lr" min="0.02" max="0.5" step="0.02" value="0.14">
+            <span id="arena-lr-val">0.14</span>
+          </label>
+          <button id="arena-nn-train">train</button>
+          <button id="arena-nn-reset">reset weights</button>
+        </div>
+      </div>
+
+      <div class="canvas-wrap" id="arena-wrap">
+        <canvas id="arena-canvas"></canvas>
+      </div>
+
+      <div class="statusbar">
+        <span id="arena-hint">drag to draw/erase walls | drag S or E markers to move start/end</span>
+        <span id="arena-stats">ready</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

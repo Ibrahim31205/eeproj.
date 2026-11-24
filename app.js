@@ -1275,11 +1275,298 @@ HLT`
         if (visited.has(ck)) continue;
         visited.add(ck);
 
-        if (cur.c === goal.c && cur.r === goal.r) {
+    if (cur.c === goal.c && cur.r === goal.r) {
           let p = ck;
           while (p) {
             const [c, r] = p.split(',').map(Number);
             path.push({ c, r });
             p = cameFrom.get(p);
           }
-          pfRunning
+          pfRunning = false;
+          statsEl.textContent = `${algo} · visited ${visited.size} · path ${path.length - 1} steps`;
+          return;
+        }
+
+        for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nc = cur.c + dc, nr = cur.r + dr;
+          if (nc < 0 || nc >= COLS || nr < 0 || nr >= ROWS || walls[nr][nc]) continue;
+          const nk = key(nc, nr);
+          if (visited.has(nk)) continue;
+          const ng = cur.g + 1;
+          if (!gScore.has(nk) || ng < gScore.get(nk)) {
+            gScore.set(nk, ng);
+            cameFrom.set(nk, ck);
+            const h = algo === 'astar' ? Math.abs(nc - goal.c) + Math.abs(nr - goal.r) : 0;
+            open.push({ c: nc, r: nr, g: ng, f: ng + h });
+            frontier.add(nk);
+          }
+        }
+      }
+      if (open.length === 0) { pfRunning = false; statsEl.textContent = 'no path found'; }
+      else statsEl.textContent = `${algo} · exploring (${visited.size} visited)`;
+    }
+
+    function drawPathfind() {
+      stepSearch();
+      const { w, h } = state;
+      ctx.fillStyle = '#0c0e11'; ctx.fillRect(0, 0, w, h);
+      const { cell, ox, oy } = gridGeom();
+
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const x = ox + c * cell, y = oy + r * cell, k = key(c, r);
+          if (walls[r][c]) ctx.fillStyle = '#262d3a';
+          else if (visited.has(k)) ctx.fillStyle = '#132822';
+          else if (frontier.has(k)) ctx.fillStyle = '#3b2b10';
+          else ctx.fillStyle = '#11141a';
+          ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2);
+        }
+      }
+
+      if (path.length > 1) {
+        ctx.beginPath();
+        for (let i = 0; i < path.length; i++) {
+          const px = ox + (path[i].c + 0.5) * cell, py = oy + (path[i].r + 0.5) * cell;
+          if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.strokeStyle = '#34d399'; ctx.lineWidth = Math.max(2, cell * 0.25); ctx.stroke();
+      }
+
+      const drawMark = (pt, col, lbl) => {
+        const x = ox + pt.c * cell, y = oy + pt.r * cell;
+        ctx.fillStyle = col;
+        ctx.fillRect(x + 1, y + 1, cell - 2, cell - 2);
+        ctx.fillStyle = '#0c0e11';
+        ctx.font = `bold ${Math.max(10, cell - 6)}px ${FONT}`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(lbl, x + cell / 2, y + cell / 2 + 1);
+      };
+      drawMark(start, '#34d399', 'S');
+      drawMark(goal, '#f59e0b', 'E');
+    }
+
+    // --- Mini Neural Network (2 -> 6 -> 1 MLP) ---
+    const HID = 6;
+    let W1, b1, W2, b2, samples = [], nnTrain = false, epoch = 0, lastLoss = 0, lr = 0.14;
+    let lastActH = new Float32Array(HID), lastOut = 0.5;
+    const nnOff = document.createElement('canvas');
+    nnOff.width = 48; nnOff.height = 48;
+    const nnCtx = nnOff.getContext('2d');
+    const nnImg = nnCtx.createImageData(48, 48);
+
+    function initWeights() {
+      W1 = Array.from({ length: HID }, () => [(Math.random() - 0.5) * 2.4, (Math.random() - 0.5) * 2.4]);
+      b1 = Array.from({ length: HID }, () => (Math.random() - 0.5) * 0.5);
+      W2 = Array.from({ length: HID }, () => (Math.random() - 0.5) * 2.2);
+      b2 = 0; epoch = 0; lastLoss = 0;
+    }
+
+    function genDataset(name) {
+      samples = [];
+      for (let i = 0; i < 80; i++) {
+        if (name === 'xor') {
+          const x = (Math.random() * 1.6 - 0.8), y = (Math.random() * 1.6 - 0.8);
+          samples.push({ x, y, t: (x * y > 0) ? 1 : 0 });
+        } else if (name === 'circle') {
+          const r = Math.random() < 0.5 ? Math.random() * 0.42 : 0.62 + Math.random() * 0.28;
+          const a = Math.random() * Math.PI * 2;
+          samples.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, t: r < 0.5 ? 1 : 0 });
+        } else if (name === 'spiral') {
+          const cls = i % 2;
+          const n = (i / 80);
+          const r = 0.15 + n * 0.72;
+          const a = n * 5.2 + cls * Math.PI + (Math.random() - 0.5) * 0.25;
+          samples.push({ x: Math.cos(a) * r, y: Math.sin(a) * r, t: cls });
+        } else {
+          const x = Math.random() * 1.7 - 0.85, y = Math.random() * 1.7 - 0.85;
+          samples.push({ x, y, t: (x + y > 0) ? 1 : 0 });
+        }
+      }
+      initWeights();
+    }
+
+    function forward(x, y) {
+      const h = new Float32Array(HID);
+      let z2 = b2;
+      for (let i = 0; i < HID; i++) {
+        h[i] = Math.tanh(W1[i][0] * x + W1[i][1] * y + b1[i]);
+        z2 += W2[i] * h[i];
+      }
+      const out = 1 / (1 + Math.exp(-z2));
+      return { h, out };
+    }
+
+    function trainEpoch() {
+      let loss = 0;
+      const n = samples.length || 1;
+      for (const s of samples) {
+        const { h, out } = forward(s.x, s.y);
+        lastActH = h; lastOut = out;
+        const err = out - s.t;
+        loss += err * err;
+        const dOut = err * out * (1 - out);
+        for (let i = 0; i < HID; i++) {
+          const dH = dOut * W2[i] * (1 - h[i] * h[i]);
+          W2[i] -= lr * dOut * h[i];
+          W1[i][0] -= lr * dH * s.x;
+          W1[i][1] -= lr * dH * s.y;
+          b1[i] -= lr * dH;
+        }
+        b2 -= lr * dOut;
+      }
+      epoch++;
+      lastLoss = loss / n;
+    }
+
+    function plotRect() {
+      const pad = 20;
+      const size = Math.min(state.h - pad * 2, state.w * 0.52 - pad * 2);
+      return { x: pad, y: Math.floor((state.h - size) / 2), s: Math.max(120, Math.floor(size)) };
+    }
+
+    function drawMLP() {
+      if (nnTrain) { for (let k = 0; k < 6; k++) trainEpoch(); }
+      const { w, h } = state;
+      ctx.fillStyle = '#0c0e11'; ctx.fillRect(0, 0, w, h);
+
+      const pr = plotRect();
+      const d = nnImg.data;
+      for (let py = 0; py < 48; py++) {
+        const ny = 1 - (py / 47) * 2;
+        for (let px = 0; px < 48; px++) {
+          const nx = (px / 47) * 2 - 1;
+          const p = forward(nx, ny).out;
+          const idx = (py * 48 + px) * 4;
+          d[idx]     = Math.round(62 * (1 - p) + 18 * p);
+          d[idx + 1] = Math.round(42 * (1 - p) + 92 * p);
+          d[idx + 2] = Math.round(16 * (1 - p) + 68 * p);
+          d[idx + 3] = 255;
+        }
+      }
+      nnCtx.putImageData(nnImg, 0, 0);
+      ctx.drawImage(nnOff, pr.x, pr.y, pr.s, pr.s);
+      ctx.strokeStyle = '#262c36'; ctx.lineWidth = 1;
+      ctx.strokeRect(pr.x, pr.y, pr.s, pr.s);
+
+      for (const s of samples) {
+        const sx = pr.x + ((s.x + 1) / 2) * pr.s;
+        const sy = pr.y + ((1 - s.y) / 2) * pr.s;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = s.t ? '#34d399' : '#f59e0b';
+        ctx.fill();
+        ctx.strokeStyle = '#0c0e11'; ctx.lineWidth = 1.2; ctx.stroke();
+      }
+
+      const gx = pr.x + pr.s + 36, gw = Math.max(140, w - gx - 24);
+      const colX = [gx + 20, gx + gw * 0.5, gx + gw - 24];
+      const inY = [h * 0.36, h * 0.64];
+      const hidY = Array.from({ length: HID }, (_, i) => (h * 0.16) + ((h * 0.68) / (HID - 1)) * i);
+      const outY = h * 0.5;
+
+      for (let i = 0; i < HID; i++) {
+        for (let j = 0; j < 2; j++) {
+          const wt = W1[i][j];
+          ctx.beginPath(); ctx.moveTo(colX[0], inY[j]); ctx.lineTo(colX[1], hidY[i]);
+          ctx.strokeStyle = wt >= 0 ? 'rgba(52,211,153,0.65)' : 'rgba(245,158,11,0.65)';
+          ctx.lineWidth = Math.min(4, 0.5 + Math.abs(wt) * 0.9); ctx.stroke();
+        }
+        const wt2 = W2[i];
+        ctx.beginPath(); ctx.moveTo(colX[1], hidY[i]); ctx.lineTo(colX[2], outY);
+        ctx.strokeStyle = wt2 >= 0 ? 'rgba(52,211,153,0.7)' : 'rgba(245,158,11,0.7)';
+        ctx.lineWidth = Math.min(4, 0.5 + Math.abs(wt2) * 0.9); ctx.stroke();
+      }
+
+      const drawNeuron = (x, y, val, lbl) => {
+        ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI * 2);
+        ctx.fillStyle = '#13161b'; ctx.fill();
+        ctx.strokeStyle = val >= 0 ? '#34d399' : '#f59e0b';
+        ctx.lineWidth = 1.8; ctx.stroke();
+        ctx.fillStyle = '#d8dee9'; ctx.font = `10px ${FONT}`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(lbl, x, y);
+      };
+      drawNeuron(colX[0], inY[0], 1, 'x1');
+      drawNeuron(colX[0], inY[1], 1, 'x2');
+      for (let i = 0; i < HID; i++) drawNeuron(colX[1], hidY[i], lastActH[i], `h${i}`);
+      drawNeuron(colX[2], outY, lastOut - 0.5, 'y');
+
+      statsEl.textContent = `epoch ${epoch} · mse ${lastLoss.toFixed(4)} · ${samples.length} pts`;
+    }
+
+    function loop() {
+      if (mode === 'pathfind') drawPathfind(); else drawMLP();
+      rafId = requestAnimationFrame(loop);
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      const p = pointerPos(canvas, e);
+      if (mode === 'pathfind') {
+        const cell = cellAt(p.x, p.y);
+        if (!cell) return;
+        resetSearch();
+        if (cell.c === start.c && cell.r === start.r) dragMode = 'start';
+        else if (cell.c === goal.c && cell.r === goal.r) dragMode = 'goal';
+        else {
+          dragMode = walls[cell.r][cell.c] ? 'erase' : 'wall';
+          walls[cell.r][cell.c] = dragMode === 'wall' ? 1 : 0;
+        }
+      } else {
+        const pr = plotRect();
+        if (p.x >= pr.x && p.x <= pr.x + pr.s && p.y >= pr.y && p.y <= pr.y + pr.s) {
+          const nx = ((p.x - pr.x) / pr.s) * 2 - 1;
+          const ny = 1 - ((p.y - pr.y) / pr.s) * 2;
+          samples.push({ x: nx, y: ny, t: e.button === 2 ? 0 : 1 });
+        }
+      }
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (mode !== 'pathfind' || !dragMode) return;
+      const p = pointerPos(canvas, e), cell = cellAt(p.x, p.y);
+      if (!cell) return;
+      if (dragMode === 'start' && !walls[cell.r][cell.c]) start = cell;
+      else if (dragMode === 'goal' && !walls[cell.r][cell.c]) goal = cell;
+      else if (dragMode === 'wall' && !(cell.c === start.c && cell.r === start.r) && !(cell.c === goal.c && cell.r === goal.r)) {
+        walls[cell.r][cell.c] = 1;
+      } else if (dragMode === 'erase') walls[cell.r][cell.c] = 0;
+    });
+
+    window.addEventListener('mouseup', () => { dragMode = null; });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    modeSel.addEventListener('change', () => {
+      mode = modeSel.value;
+      pfCtrls.classList.toggle('hidden', mode !== 'pathfind');
+      nnCtrls.classList.toggle('hidden', mode !== 'mlp');
+      hintEl.textContent = mode === 'pathfind'
+        ? 'drag to draw/erase walls | drag S or E markers to move start/end'
+        : 'left-click plot to add green (1) point | right-click to add amber (0) point';
+    });
+
+    document.getElementById('arena-pf-run').addEventListener('click', startSearch);
+    document.getElementById('arena-maze').addEventListener('click', genMaze);
+    document.getElementById('arena-pf-clear').addEventListener('click', () => {
+      resetSearch();
+      walls = Array.from({ length: ROWS }, () => new Uint8Array(COLS));
+    });
+
+    dsSel.addEventListener('change', () => genDataset(dsSel.value));
+    lrSlider.addEventListener('input', () => { lr = parseFloat(lrSlider.value); lrVal.textContent = lr.toFixed(2); });
+    trainBtn.addEventListener('click', () => {
+      nnTrain = !nnTrain;
+      trainBtn.textContent = nnTrain ? 'pause' : 'train';
+      trainBtn.classList.toggle('active', nnTrain);
+    });
+    document.getElementById('arena-nn-reset').addEventListener('click', initWeights);
+
+    genDataset('xor');
+    App.register('arena', {
+      onShow() { resize(); if (!rafId) rafId = requestAnimationFrame(loop); },
+      onHide() {
+        nnTrain = false; trainBtn.textContent = 'train'; trainBtn.classList.remove('active');
+        if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      }
+    });
+  })();
+})();
